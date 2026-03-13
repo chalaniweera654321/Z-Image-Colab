@@ -1,6 +1,9 @@
 #@title Run Gradio app Z-Image-Turbo Image Inpaint 
 # root_path="/content"
 # %cd $root_path/ComfyUI
+import os 
+root_path = os.path.dirname(os.getcwd())
+
 
 import os,sys,gc,random,time,uuid,re
 import torch
