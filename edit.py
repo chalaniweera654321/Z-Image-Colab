@@ -2,7 +2,7 @@
 # root_path = "/kaggle/working" # @param ['/content', '/root', '/kaggle/working','/teamspace/studios/this_studio']
 # %cd $root_path/ComfyUI
 
-import os 
+import os , shutil
 root_path = os.path.dirname(os.getcwd())
 
 import os, random, time, sys, re, uuid, gc, ctypes
@@ -43,7 +43,7 @@ import server
 import execution
 import nodes
 
-print("Initializing ComfyUI Nodes...")
+# print("Initializing ComfyUI Nodes...")
 loop = asyncio.get_event_loop()
 server_instance = server.PromptServer(loop)
 execution.PromptQueue(server_instance)
@@ -75,7 +75,7 @@ def print_mem_stats(tag=""):
         for i in range(torch.cuda.device_count()):
             vram_alloc = torch.cuda.memory_allocated(i) / 1024**3
             mem_str += f" | GPU {i} Alloc: {vram_alloc:.2f}GB"
-    print(mem_str)
+    # print(mem_str)
 
 def gpu_vram_gb():
     if not torch.cuda.is_available(): return 0
@@ -175,7 +175,7 @@ def fit_to_closest_aspect_ratio(img, mask):
 # ======================================================================
 @torch.inference_mode()
 def edit_image(init_image_path, mask_image_path, pos_prompt, neg_prompt, steps, cfg, seed, denoise, unet_opt, clip_opt, vae_opt):
-    print(f"\n[DEBUG] ⚙️ Generating edit... Seed: {seed}")
+    # print(f"\n[DEBUG] ⚙️ Generating edit... Seed: {seed}")
     
     raw_image = Image.open(init_image_path)
     mask_image = Image.open(mask_image_path)
@@ -287,7 +287,9 @@ def process_gradio(editor_data, pos_prompt, neg_prompt, steps, cfg, seed, denois
     loaded_unet, loaded_clip, loaded_vae = load_z_models()
     output_img = edit_image(orig_path, mask_path, pos_prompt, neg_prompt, int(steps), float(cfg), current_seed, float(denoise), loaded_unet, loaded_clip, loaded_vae)
     output_img.save(out_path)
-    
+    drive_path="/content/gdrive/MyDrive/z_image_turbo"
+    if os.path.exists(drive_path):
+        shutil.copy(out_path,drive_path)
     duration = round(time.time() - start_time, 2)
     return output_img, out_path, str(current_seed), f"{duration} seconds"
 
