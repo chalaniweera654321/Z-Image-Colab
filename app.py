@@ -1,7 +1,7 @@
 #@title Utils Code
 # %cd /content/ComfyUI
 
-import os, random, time
+import os, random, time, shutil
 
 import torch
 import numpy as np
@@ -58,6 +58,9 @@ def generate(input):
     decoded = VAEDecode.decode(vae, samples)[0].detach()
     save_path=get_save_path(positive_prompt)
     Image.fromarray(np.array(decoded*255, dtype=np.uint8)[0]).save(save_path)
+    drive_path="/content/gdrive/MyDrive/z_image_turbo"
+    if os.path.exists(drive_path):
+        shutil.copy(save_path,drive_path)
     return save_path,seed
     
 import gradio as gr
