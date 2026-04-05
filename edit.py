@@ -1,6 +1,16 @@
 
 # root_path = "/kaggle/working" # @param ['/content', '/root', '/kaggle/working','/teamspace/studios/this_studio']
 # %cd $root_path/ComfyUI
+import os
+os.environ["UVICORN_LOOP"] = "asyncio"
+
+import asyncio
+
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 
 import os , shutil
 root_path = os.path.dirname(os.getcwd())
