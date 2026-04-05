@@ -163,7 +163,7 @@ def load_z_models():
         device_0 = torch.device("cuda:0")
         device_1 = torch.device("cuda:1") if DUAL_GPU else device_0
         
-        unet = UNETLoader.load_unet("z-image-turbo-fp8-e4m3fn.safetensors", "fp8_e4m3fn_fast")[0]
+        unet = UNETLoader.load_unet("z_image_turbo_bf16.safetensors", "default")[0]
         vae = VAELoader.load_vae("ae.safetensors")[0]
         
         clip_device_str = "cuda:1" if DUAL_GPU else "default"
