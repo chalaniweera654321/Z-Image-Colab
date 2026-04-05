@@ -6,6 +6,11 @@ from PIL import Image
 import re, uuid
 from nodes import NODE_CLASS_MAPPINGS
 
+# ── Model Loading ──────────────────────────────────────────────
+print("\n" + "="*50)
+print("  Z-Image-Turbo Starting Up")
+print("="*50)
+
 UNETLoader = NODE_CLASS_MAPPINGS["UNETLoader"]()
 CLIPLoader = NODE_CLASS_MAPPINGS["CLIPLoader"]()
 VAELoader = NODE_CLASS_MAPPINGS["VAELoader"]()
@@ -14,22 +19,38 @@ KSampler = NODE_CLASS_MAPPINGS["KSampler"]()
 VAEDecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
 EmptyLatentImage = NODE_CLASS_MAPPINGS["EmptyLatentImage"]()
 
-with torch.inference_mode():
-    unet = UNETLoader.load_unet("z_image_turbo_bf16.safetensors", "default")[0]
-    clip = CLIPLoader.load_clip("qwen_3_4b.safetensors", type="lumina2")[0]
-    vae = VAELoader.load_vae("ae.safetensors")[0]
+startup_start = time.time()
 
+with torch.inference_mode():
+    print("\n[1/3] Loading UNet... ", end="", flush=True)
+    t0 = time.time()
+    unet = UNETLoader.load_unet("z_image_turbo_bf16.safetensors", "default")[0]
+    print(f"done ({time.time()-t0:.1f}s)")
+
+    print("[2/3] Loading CLIP (Qwen3)... ", end="", flush=True)
+    t0 = time.time()
+    clip = CLIPLoader.load_clip("qwen_3_4b.safetensors", type="lumina2")[0]
+    print(f"done ({time.time()-t0:.1f}s)")
+
+    print("[3/3] Loading VAE... ", end="", flush=True)
+    t0 = time.time()
+    vae = VAELoader.load_vae("ae.safetensors")[0]
+    print(f"done ({time.time()-t0:.1f}s)")
+
+print(f"\n✅ All models loaded in {time.time()-startup_start:.1f}s")
+print("="*50 + "\n")
+
+# ── Helpers ────────────────────────────────────────────────────
 save_dir = "./results"
 os.makedirs(save_dir, exist_ok=True)
 
 def get_save_path(prompt):
-    save_dir = "./results"
     safe_prompt = re.sub(r'[^a-zA-Z0-9_-]', '_', prompt)[:25]
     uid = uuid.uuid4().hex[:6]
     filename = f"{safe_prompt}_{uid}.png"
-    path = os.path.join(save_dir, filename)
-    return path
+    return os.path.join(save_dir, filename)
 
+# ── Generation ─────────────────────────────────────────────────
 @torch.inference_mode()
 def generate(input):
     values = input["input"]
@@ -45,23 +66,64 @@ def generate(input):
     height = values['height']
     batch_size = values['batch_size']
 
+    print("\n" + "="*50)
+    print("  New Generation Request")
+    print("="*50)
+
     if seed == 0:
         random.seed(int(time.time()))
         seed = random.randint(0, 18446744073709551615)
+        print(f"  Seed       : {seed} (randomized)")
+    else:
+        print(f"  Seed       : {seed}")
 
+    print(f"  Size       : {width}x{height}")
+    print(f"  Steps      : {steps}")
+    print(f"  CFG        : {cfg}")
+    print(f"  Sampler    : {sampler_name} / {scheduler}")
+    print(f"  Denoise    : {denoise}")
+    print(f"  Prompt     : {positive_prompt[:80]}{'...' if len(positive_prompt) > 80 else ''}")
+    print("="*50)
+
+    total_start = time.time()
+
+    print("\n[1/4] Encoding prompts... ", end="", flush=True)
+    t0 = time.time()
     positive = CLIPTextEncode.encode(clip, positive_prompt)[0]
     negative = CLIPTextEncode.encode(clip, negative_prompt)[0]
+    print(f"done ({time.time()-t0:.1f}s)")
+
+    print("[2/4] Creating latent image... ", end="", flush=True)
+    t0 = time.time()
     latent_image = EmptyLatentImage.generate(width, height, batch_size=batch_size)[0]
+    print(f"done ({time.time()-t0:.1f}s)")
+
+    print(f"[3/4] Sampling ({steps} steps)...")
+    t0 = time.time()
     samples = KSampler.sample(unet, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=denoise)[0]
+    print(f"      Sampling done ({time.time()-t0:.1f}s)")
+
+    print("[4/4] Decoding image (VAE)... ", end="", flush=True)
+    t0 = time.time()
     decoded = VAEDecode.decode(vae, samples)[0].detach()
+    print(f"done ({time.time()-t0:.1f}s)")
+
     save_path = get_save_path(positive_prompt)
     Image.fromarray(np.array(decoded * 255, dtype=np.uint8)[0]).save(save_path)
+    print(f"\n💾 Saved to : {save_path}")
+
     drive_path = "/content/gdrive/MyDrive/z_image_turbo"
     if os.path.exists(drive_path):
         shutil.copy(save_path, drive_path)
+        print(f"☁️  Copied to Google Drive: {drive_path}")
+
+    print(f"✅ Total    : {time.time()-total_start:.1f}s")
+    print("="*50 + "\n")
+
     return save_path, seed
 
 
+# ── Gradio UI ──────────────────────────────────────────────────
 import gradio as gr
 
 def generate_ui(
@@ -131,12 +193,12 @@ with gr.Blocks() as demo:
         with gr.Column():
             positive = gr.Textbox(DEFAULT_POSITIVE, label="Positive Prompt", lines=5)
             with gr.Row():
-                aspect = gr.Dropdown(ASPECTS, value="1080x1920 (9:16)", label="Aspect Ratio")
+                aspect = gr.Dropdown(ASPECTS, value="1024x1024 (1:1)", label="Aspect Ratio")
                 seed = gr.Number(value=0, label="Seed (0 = random)", precision=0)
                 steps = gr.Slider(4, 25, value=9, step=1, label="Steps")
             with gr.Row():
-                width = gr.Number(value=1080, label="Width", precision=0)
-                height = gr.Number(value=1920, label="Height", precision=0)
+                width = gr.Number(value=1024, label="Width", precision=0)
+                height = gr.Number(value=1024, label="Height", precision=0)
             with gr.Row():
                 run = gr.Button('🚀 Generate', variant='primary')
             with gr.Accordion('Image Settings', open=False):
@@ -151,7 +213,6 @@ with gr.Blocks() as demo:
             output_img = gr.Image(label="Generated Image", height=480)
             used_seed = gr.Textbox(label="Seed Used", interactive=False)
 
-    # Auto-fill width/height when dropdown changes
     aspect.change(fn=update_dims, inputs=aspect, outputs=[width, height])
 
     run.click(
