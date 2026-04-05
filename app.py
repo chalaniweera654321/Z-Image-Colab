@@ -178,7 +178,7 @@ ASPECTS = [
 
 custom_css = ".gradio-container { font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif; }"
 
-with gr.Blocks() as demo:
+with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
     gr.HTML("""
 <div style="width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; margin:20px 0;">
     <h1 style="font-size:2.5em; margin-bottom:10px;">Z-Image-Turbo</h1>
@@ -221,4 +221,4 @@ with gr.Blocks() as demo:
         outputs=[download_image, output_img, used_seed]
     )
 
-demo.launch(theme=gr.themes.Soft(), css=custom_css, share=True, debug=True)
+demo.launch(share=True, debug=True)
