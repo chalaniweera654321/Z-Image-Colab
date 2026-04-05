@@ -1,21 +1,21 @@
 # =========================
-# 🔥 MUST BE AT VERY TOP
+# 🔥 HARD FIX (MUST BE FIRST)
 # =========================
+import sys
+sys.modules['uvloop'] = None  # completely disable uvloop
+
 import os
 os.environ["UVICORN_LOOP"] = "asyncio"
 
-import sys
-sys.modules['uvloop'] = None  # extra safety (recommended for Kaggle)
-
 import asyncio
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+
+# Create and set a global event loop (main thread)
+main_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(main_loop)
 
 
 # =========================
-# NORMAL IMPORTS START HERE
+# NORMAL IMPORTS
 # =========================
 import os, shutil
 root_path = os.path.dirname(os.getcwd())
@@ -31,9 +31,25 @@ import psutil
 
 
 # =========================
+# THREAD LOOP FIX (IMPORTANT)
+# =========================
+import threading
+
+def ensure_loop():
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+# Ensure at least one extra thread has a loop ready
+threading.Thread(target=ensure_loop).start()
+
+
+# =========================
 # COMFYUI PATH SETUP
 # =========================
-comfyui_path = f"{root_path}/ComfyUI"   
+comfyui_path = f"{root_path}/ComfyUI"
+
 if comfyui_path in sys.path:
     sys.path.remove(comfyui_path)
 sys.path.insert(0, comfyui_path)
@@ -43,8 +59,8 @@ for key in list(sys.modules.keys()):
         del sys.modules[key]
 
 importlib.invalidate_caches()
-comfy_utils_path = os.path.join(comfyui_path, "utils", "__init__.py")
 
+comfy_utils_path = os.path.join(comfyui_path, "utils", "__init__.py")
 if os.path.exists(comfy_utils_path):
     spec = importlib.util.spec_from_file_location(
         "utils",
@@ -60,14 +76,13 @@ import comfy.model_management
 
 
 # =========================
-# ASYNC FIX (keep this)
+# ⚠️ IMPORTANT: NO nest_asyncio
 # =========================
-import nest_asyncio
-nest_asyncio.apply()
+# (REMOVED — causes crashes in Python 3.12 threads)
 
 
 # =========================
-# NOW SAFE TO IMPORT THESE
+# SAFE IMPORTS
 # =========================
 import server
 import execution
@@ -75,9 +90,10 @@ import nodes
 
 
 # =========================
-# CONTINUE YOUR CODE
+# INIT COMFYUI
 # =========================
 loop = asyncio.get_event_loop()
+
 server_instance = server.PromptServer(loop)
 execution.PromptQueue(server_instance)
 
