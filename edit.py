@@ -1,10 +1,26 @@
+# =========================
+# 🔥 MUST BE AT VERY TOP
+# =========================
+import os
+os.environ["UVICORN_LOOP"] = "asyncio"
 
-# root_path = "/kaggle/working" # @param ['/content', '/root', '/kaggle/working','/teamspace/studios/this_studio']
-# %cd $root_path/ComfyUI
-import os , shutil
+import sys
+sys.modules['uvloop'] = None  # extra safety (recommended for Kaggle)
+
+import asyncio
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+# =========================
+# NORMAL IMPORTS START HERE
+# =========================
+import os, shutil
 root_path = os.path.dirname(os.getcwd())
 
-import os, random, time, sys, re, uuid, gc, ctypes
+import random, time, re, uuid, gc, ctypes
 import torch
 import numpy as np
 import importlib
@@ -14,8 +30,12 @@ import gradio as gr
 import psutil
 
 
+# =========================
+# COMFYUI PATH SETUP
+# =========================
 comfyui_path = f"{root_path}/ComfyUI"   
-if comfyui_path in sys.path: sys.path.remove(comfyui_path)
+if comfyui_path in sys.path:
+    sys.path.remove(comfyui_path)
 sys.path.insert(0, comfyui_path)
 
 for key in list(sys.modules.keys()):
@@ -24,8 +44,13 @@ for key in list(sys.modules.keys()):
 
 importlib.invalidate_caches()
 comfy_utils_path = os.path.join(comfyui_path, "utils", "__init__.py")
+
 if os.path.exists(comfy_utils_path):
-    spec = importlib.util.spec_from_file_location("utils", comfy_utils_path, submodule_search_locations=[os.path.join(comfyui_path, "utils")])
+    spec = importlib.util.spec_from_file_location(
+        "utils",
+        comfy_utils_path,
+        submodule_search_locations=[os.path.join(comfyui_path, "utils")]
+    )
     if spec and spec.loader:
         utils_module = importlib.util.module_from_spec(spec)
         sys.modules["utils"] = utils_module
@@ -34,25 +59,24 @@ if os.path.exists(comfy_utils_path):
 import comfy.model_management
 
 
+# =========================
+# ASYNC FIX (keep this)
+# =========================
 import nest_asyncio
 nest_asyncio.apply()
 
-import asyncio
+
+# =========================
+# NOW SAFE TO IMPORT THESE
+# =========================
 import server
 import execution
 import nodes
 
-import os
-os.environ["UVICORN_LOOP"] = "asyncio"
 
-import asyncio
-
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
-# print("Initializing ComfyUI Nodes...")
+# =========================
+# CONTINUE YOUR CODE
+# =========================
 loop = asyncio.get_event_loop()
 server_instance = server.PromptServer(loop)
 execution.PromptQueue(server_instance)
