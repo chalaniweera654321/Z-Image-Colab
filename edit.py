@@ -253,7 +253,7 @@ def edit_image(init_image_path, mask_image_path, pos_prompt, neg_prompt, steps, 
         aggressive_clean()
 
     # --- PHASE 3: UNET SAMPLING ---
-    unet = UNETLoader.load_unet("z-image-turbo-fp8-e4m3fn.safetensors", "fp8_e4m3fn_fast")[0] if is_sequential else unet_opt
+    unet = UNETLoader.load_unet("z_image_turbo_bf16.safetensors", "default")[0] if is_sequential else unet_opt
     patched_unet = ModelSamplingAuraFlow.patch_aura(model=unet, shift=3)[0]
     
     samples = KSampler.sample(
