@@ -70,21 +70,6 @@ def generate(input):
     print("  New Generation Request")
     print("="*50)
 
-    if seed == 0:
-        random.seed(int(time.time()))
-        seed = random.randint(0, 18446744073709551615)
-        print(f"  Seed       : {seed} (randomized)")
-    else:
-        print(f"  Seed       : {seed}")
-
-    print(f"  Size       : {width}x{height}")
-    print(f"  Steps      : {steps}")
-    print(f"  CFG        : {cfg}")
-    print(f"  Sampler    : {sampler_name} / {scheduler}")
-    print(f"  Denoise    : {denoise}")
-    print(f"  Prompt     : {positive_prompt[:80]}{'...' if len(positive_prompt) > 80 else ''}")
-    print("="*50)
-
     total_start = time.time()
 
     print("\n[1/4] Encoding prompts... ", end="", flush=True)
