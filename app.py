@@ -170,6 +170,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
                 height = gr.Number(value=1024, label="Height", precision=0)
                 seed = gr.Number(value=0, label="Seed (0 = random)", precision=0)
                 steps = gr.Slider(4, 25, value=9, step=1, label="Steps")
+                batch_size = gr.Number(value=1, label="batch size", precision=0)
             with gr.Row():
                 run = gr.Button('🚀 Generate', variant='primary')
             with gr.Accordion('Image Settings', open=False):
@@ -186,7 +187,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
 
     run.click(
         fn=generate_ui,
-        inputs=[positive, negative, width, height, seed, steps, cfg, denoise],
+        inputs=[positive, negative, width, height, seed, steps, batch_size, cfg, denoise],
         outputs=[download_image, output_img, used_seed]
     )
 
