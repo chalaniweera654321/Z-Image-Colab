@@ -120,7 +120,7 @@ def generate_ui(
     steps,
     cfg,
     denoise,
-    batch_size=1,
+    batch_size,
     sampler_name="euler",
     scheduler="simple"
 ):
