@@ -1,15 +1,29 @@
-import os, random, time, shutil
+import os
+import random
+import time
+import shutil
+import re
+import uuid
 
 import torch
 import numpy as np
 from PIL import Image
-import re, uuid
+
 from nodes import NODE_CLASS_MAPPINGS
 
-# ── Model Loading ──────────────────────────────────────────────
-print("\n" + "="*50)
-print("  Z-Image-Turbo + LoRA Starting Up")
-print("="*50)
+
+# ============================================================
+# Z-IMAGE-TURBO + MULTIPLE LORA
+# ============================================================
+
+print("\n" + "=" * 60)
+print("        Z-IMAGE-TURBO + MULTIPLE LoRA")
+print("=" * 60)
+
+
+# ============================================================
+# COMFYUI NODES
+# ============================================================
 
 UNETLoader = NODE_CLASS_MAPPINGS["UNETLoader"]()
 CLIPLoader = NODE_CLASS_MAPPINGS["CLIPLoader"]()
@@ -18,25 +32,31 @@ CLIPTextEncode = NODE_CLASS_MAPPINGS["CLIPTextEncode"]()
 KSampler = NODE_CLASS_MAPPINGS["KSampler"]()
 VAEDecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
 EmptyLatentImage = NODE_CLASS_MAPPINGS["EmptyLatentImage"]()
-
-# LoRA loader
 LoraLoader = NODE_CLASS_MAPPINGS["LoraLoader"]()
+
+
+# ============================================================
+# BASE MODEL
+# ============================================================
 
 startup_start = time.time()
 
 with torch.inference_mode():
 
-    print("\n[1/4] Loading UNet... ", end="", flush=True)
+    print("\n[1/3] Loading UNet... ", end="", flush=True)
+
     t0 = time.time()
 
-    base_unet = UNETLoader.load_unet(
+    base_model = UNETLoader.load_unet(
         "z_image_turbo_bf16.safetensors",
         "default"
     )[0]
 
-    print(f"done ({time.time()-t0:.1f}s)")
+    print(f"done ({time.time() - t0:.1f}s)")
 
-    print("[2/4] Loading CLIP (Qwen3)... ", end="", flush=True)
+
+    print("[2/3] Loading CLIP (Qwen3)... ", end="", flush=True)
+
     t0 = time.time()
 
     base_clip = CLIPLoader.load_clip(
@@ -44,233 +64,454 @@ with torch.inference_mode():
         type="lumina2"
     )[0]
 
-    print(f"done ({time.time()-t0:.1f}s)")
-
-    print("[3/4] Loading VAE... ", end="", flush=True)
-    t0 = time.time()
-
-    vae = VAELoader.load_vae("ae.safetensors")[0]
-
-    print(f"done ({time.time()-t0:.1f}s)")
-
-print(f"\n✅ Base models loaded in {time.time()-startup_start:.1f}s")
-print("="*50 + "\n")
+    print(f"done ({time.time() - t0:.1f}s)")
 
 
-# ── LoRA ───────────────────────────────────────────────────────
-# Put your LoRA inside:
-#
-# ComfyUI/models/loras/
-#
-# Example:
-# ComfyUI/models/loras/my_lora.safetensors
-
-DEFAULT_LORA = "my_lora.safetensors"
-
-def load_lora(lora_name, model_strength=1.0, clip_strength=1.0):
-
-    if not lora_name:
-        print("ℹ️ No LoRA selected")
-        return base_unet, base_clip
-
-    print("\n" + "="*50)
-    print("  Loading LoRA")
-    print("="*50)
-
-    print(f"LoRA: {lora_name}")
-    print(f"Model strength: {model_strength}")
-    print(f"CLIP strength: {clip_strength}")
+    print("[3/3] Loading VAE... ", end="", flush=True)
 
     t0 = time.time()
 
-    model, clip = LoraLoader.load_lora(
-        base_unet,
-        base_clip,
-        lora_name,
-        float(model_strength),
-        float(clip_strength)
+    vae = VAELoader.load_vae(
+        "ae.safetensors"
+    )[0]
+
+    print(f"done ({time.time() - t0:.1f}s)")
+
+
+print(
+    f"\n✅ Base models loaded in "
+    f"{time.time() - startup_start:.1f}s"
+)
+
+print("=" * 60)
+
+
+# ============================================================
+# LORA DIRECTORY
+# ============================================================
+
+# Normal ComfyUI location
+LORA_DIR = "./models/loras"
+
+
+def get_lora_files():
+
+    if not os.path.exists(LORA_DIR):
+        print(
+            f"\n⚠️ LoRA directory not found:"
+            f"\n{os.path.abspath(LORA_DIR)}"
+        )
+
+        return [""]
+
+
+    files = []
+
+    for root, dirs, filenames in os.walk(LORA_DIR):
+
+        for filename in filenames:
+
+            if filename.lower().endswith(
+                (".safetensors", ".pt", ".ckpt")
+            ):
+
+                # Return path relative to models/loras
+                relative_path = os.path.relpath(
+                    os.path.join(root, filename),
+                    LORA_DIR
+                )
+
+                files.append(relative_path)
+
+
+    files.sort()
+
+    if not files:
+        print(
+            "\n⚠️ No LoRAs found in:"
+            f"\n{os.path.abspath(LORA_DIR)}"
+        )
+
+        return [""]
+
+    print(
+        f"\n✅ Found {len(files)} LoRA(s)"
     )
 
-    print(f"✅ LoRA loaded ({time.time()-t0:.1f}s)")
-    print("="*50 + "\n")
+    for f in files:
+        print(f"   • {f}")
 
-    return model, clip
+    return files
 
 
-# ── Helpers ────────────────────────────────────────────────────
+LORA_FILES = get_lora_files()
+
+
+# ============================================================
+# APPLY MULTIPLE LORAS
+# ============================================================
+
+def apply_loras(
+    lora_names,
+    lora_strengths,
+    clip_strengths
+):
+
+    model = base_model
+    clip = base_clip
+
+    applied = []
+
+    for i in range(len(lora_names)):
+
+        lora_name = lora_names[i]
+
+        if not lora_name:
+            continue
+
+        model_strength = float(
+            lora_strengths[i]
+        )
+
+        clip_strength = float(
+            clip_strengths[i]
+        )
+
+
+        # Skip completely disabled LoRA
+        if model_strength == 0 and clip_strength == 0:
+            continue
+
+
+        print(
+            f"\n   [{i + 1}] Applying LoRA:"
+        )
+
+        print(
+            f"       {lora_name}"
+        )
+
+        print(
+            f"       Model strength: "
+            f"{model_strength}"
+        )
+
+        print(
+            f"       CLIP strength: "
+            f"{clip_strength}"
+        )
+
+
+        t0 = time.time()
+
+
+        model, clip = LoraLoader.load_lora(
+            model,
+            clip,
+            lora_name,
+            model_strength,
+            clip_strength
+        )
+
+
+        print(
+            f"       done "
+            f"({time.time() - t0:.1f}s)"
+        )
+
+
+        applied.append(
+            lora_name
+        )
+
+
+    return model, clip, applied
+
+
+# ============================================================
+# SAVE HELPERS
+# ============================================================
 
 save_dir = "./results"
-os.makedirs(save_dir, exist_ok=True)
+
+os.makedirs(
+    save_dir,
+    exist_ok=True
+)
 
 
 def get_save_path(prompt):
 
     safe_prompt = re.sub(
-        r'[^a-zA-Z0-9_-]',
-        '_',
+        r"[^a-zA-Z0-9_-]",
+        "_",
         prompt
     )[:25]
 
     uid = uuid.uuid4().hex[:6]
 
-    filename = f"{safe_prompt}_{uid}.png"
+    filename = (
+        f"{safe_prompt}_{uid}.png"
+    )
 
-    return os.path.join(save_dir, filename)
+    return os.path.join(
+        save_dir,
+        filename
+    )
 
 
-# ── Generation ─────────────────────────────────────────────────
+# ============================================================
+# GENERATION
+# ============================================================
 
 @torch.inference_mode()
 def generate(input):
 
     values = input["input"]
 
-    positive_prompt = values["positive_prompt"]
-    negative_prompt = values["negative_prompt"]
+
+    # --------------------------------------------------------
+    # Basic settings
+    # --------------------------------------------------------
+
+    positive_prompt = values[
+        "positive_prompt"
+    ]
+
+    negative_prompt = values[
+        "negative_prompt"
+    ]
 
     seed = values["seed"]
+
     steps = values["steps"]
+
     cfg = values["cfg"]
 
-    sampler_name = values["sampler_name"]
-    scheduler = values["scheduler"]
+    sampler_name = values[
+        "sampler_name"
+    ]
+
+    scheduler = values[
+        "scheduler"
+    ]
 
     denoise = values["denoise"]
 
     width = values["width"]
+
     height = values["height"]
 
-    batch_size = values["batch_size"]
+    batch_size = values[
+        "batch_size"
+    ]
 
+
+    # --------------------------------------------------------
     # LoRA settings
-    lora_name = values["lora_name"]
-    lora_strength = values["lora_strength"]
-    clip_strength = values["clip_strength"]
+    # --------------------------------------------------------
 
-    print("\n" + "="*50)
-    print("  New Generation Request")
-    print("="*50)
+    lora_names = values[
+        "lora_names"
+    ]
+
+    lora_strengths = values[
+        "lora_strengths"
+    ]
+
+    clip_strengths = values[
+        "clip_strengths"
+    ]
+
+
+    print("\n" + "=" * 60)
+    print("              NEW GENERATION")
+    print("=" * 60)
+
 
     total_start = time.time()
 
-    # ── Load LoRA ──────────────────────────────────────────────
 
-    print("\n[1/5] Applying LoRA... ", end="", flush=True)
+    # ========================================================
+    # APPLY LORAS
+    # ========================================================
 
-    t0 = time.time()
-
-    model, clip = load_lora(
-        lora_name,
-        lora_strength,
-        clip_strength
+    print(
+        "\n[1/5] Applying LoRAs..."
     )
 
-    print(f"done ({time.time()-t0:.1f}s)")
-
-
-    # ── Encode prompts ────────────────────────────────────────
-
-    print("[2/5] Encoding prompts... ", end="", flush=True)
 
     t0 = time.time()
+
+
+    model, clip, applied_loras = apply_loras(
+        lora_names,
+        lora_strengths,
+        clip_strengths
+    )
+
+
+    print(
+        f"\n✅ Applied {len(applied_loras)} LoRA(s)"
+    )
+
+    print(
+        f"   Time: {time.time() - t0:.1f}s"
+    )
+
+
+    # ========================================================
+    # PROMPTS
+    # ========================================================
+
+    print(
+        "\n[2/5] Encoding prompts... ",
+        end="",
+        flush=True
+    )
+
+
+    t0 = time.time()
+
 
     positive = CLIPTextEncode.encode(
         clip,
         positive_prompt
     )[0]
 
+
     negative = CLIPTextEncode.encode(
         clip,
         negative_prompt
     )[0]
 
-    print(f"done ({time.time()-t0:.1f}s)")
-
-
-    # ── Latent ────────────────────────────────────────────────
-
-    print("[3/5] Creating latent image... ", end="", flush=True)
-
-    t0 = time.time()
-
-    latent_image = EmptyLatentImage.generate(
-        width,
-        height,
-        batch_size=batch_size
-    )[0]
-
-    print(f"done ({time.time()-t0:.1f}s)")
-
-
-    # ── Sampling ──────────────────────────────────────────────
 
     print(
-        f"[4/5] Sampling ({steps} steps, "
-        f"LoRA strength={lora_strength})..."
+        f"done ({time.time() - t0:.1f}s)"
     )
 
+
+    # ========================================================
+    # LATENT
+    # ========================================================
+
+    print(
+        "[3/5] Creating latent image... ",
+        end="",
+        flush=True
+    )
+
+
     t0 = time.time()
+
+
+    latent_image = EmptyLatentImage.generate(
+        int(width),
+        int(height),
+        batch_size=int(batch_size)
+    )[0]
+
+
+    print(
+        f"done ({time.time() - t0:.1f}s)"
+    )
+
+
+    # ========================================================
+    # SAMPLING
+    # ========================================================
+
+    print(
+        f"[4/5] Sampling "
+        f"({steps} steps)..."
+    )
+
+
+    t0 = time.time()
+
 
     samples = KSampler.sample(
         model,
-        seed,
-        steps,
-        cfg,
+        int(seed),
+        int(steps),
+        float(cfg),
         sampler_name,
         scheduler,
         positive,
         negative,
         latent_image,
-        denoise=denoise
+        denoise=float(denoise)
     )[0]
+
 
     print(
         f"      Sampling done "
-        f"({time.time()-t0:.1f}s)"
+        f"({time.time() - t0:.1f}s)"
     )
 
 
-    # ── Decode ────────────────────────────────────────────────
+    # ========================================================
+    # VAE DECODE
+    # ========================================================
 
     print(
-        "[5/5] Decoding image (VAE)... ",
+        "[5/5] Decoding image... ",
         end="",
         flush=True
     )
 
+
     t0 = time.time()
+
 
     decoded = VAEDecode.decode(
         vae,
         samples
     )[0].detach()
 
+
     print(
-        f"done ({time.time()-t0:.1f}s)"
+        f"done ({time.time() - t0:.1f}s)"
     )
 
 
-    # ── Save ──────────────────────────────────────────────────
+    # ========================================================
+    # SAVE
+    # ========================================================
 
     save_path = get_save_path(
         positive_prompt
     )
 
-    Image.fromarray(
-        np.array(
-            decoded * 255,
-            dtype=np.uint8
-        )[0]
-    ).save(save_path)
 
-    print(
-        f"\n💾 Saved to : {save_path}"
+    image_array = np.array(
+        decoded[0] * 255,
+        dtype=np.uint8
     )
 
 
-    # ── Google Drive ─────────────────────────────────────────
+    Image.fromarray(
+        image_array
+    ).save(
+        save_path
+    )
 
-    drive_path = "/content/gdrive/MyDrive/z_image_turbo"
+
+    print(
+        f"\n💾 Saved:"
+        f"\n   {save_path}"
+    )
+
+
+    # ========================================================
+    # GOOGLE DRIVE
+    # ========================================================
+
+    drive_path = (
+        "/content/gdrive/MyDrive/"
+        "z_image_turbo"
+    )
+
 
     if os.path.exists(drive_path):
 
@@ -280,43 +521,47 @@ def generate(input):
         )
 
         print(
-            f"☁️ Copied to Google Drive: "
-            f"{drive_path}"
+            f"☁️ Copied to Google Drive:"
+            f"\n   {drive_path}"
         )
 
 
+    # ========================================================
+    # SUMMARY
+    # ========================================================
+
     print(
-        f"✅ Total: "
-        f"{time.time()-total_start:.1f}s"
+        f"\n🎨 LoRAs used:"
     )
 
-    print("="*50 + "\n")
+    if applied_loras:
+
+        for lora in applied_loras:
+            print(f"   • {lora}")
+
+    else:
+
+        print("   • None")
+
+
+    print(
+        f"\n🌱 Seed: {seed}"
+    )
+
+    print(
+        f"⏱️ Total: "
+        f"{time.time() - total_start:.1f}s"
+    )
+
+    print("=" * 60 + "\n")
+
 
     return save_path, seed
 
 
-# ── Find available LoRAs ───────────────────────────────────────
-
-def get_lora_files():
-
-    lora_dir = "./models/loras"
-
-    if not os.path.exists(lora_dir):
-        return []
-
-    files = []
-
-    for filename in os.listdir(lora_dir):
-
-        if filename.lower().endswith(
-            (".safetensors", ".pt", ".ckpt")
-        ):
-            files.append(filename)
-
-    return sorted(files)
-
-
-# ── Gradio UI ──────────────────────────────────────────────────
+# ============================================================
+# GRADIO
+# ============================================================
 
 import gradio as gr
 
@@ -324,21 +569,71 @@ import gradio as gr
 def generate_ui(
     positive_prompt,
     negative_prompt,
+
     width,
     height,
+
     seed,
     steps,
     batch_size,
+
     cfg,
     denoise,
-    lora_name,
-    lora_strength,
-    clip_strength,
+
+    lora1,
+    lora1_strength,
+    lora1_clip,
+
+    lora2,
+    lora2_strength,
+    lora2_clip,
+
+    lora3,
+    lora3_strength,
+    lora3_clip,
+
+    lora4,
+    lora4_strength,
+    lora4_clip,
+
+    lora5,
+    lora5_strength,
+    lora5_clip,
+
     sampler_name="euler",
     scheduler="simple"
 ):
 
+
+    lora_names = [
+        lora1,
+        lora2,
+        lora3,
+        lora4,
+        lora5
+    ]
+
+
+    lora_strengths = [
+        lora1_strength,
+        lora2_strength,
+        lora3_strength,
+        lora4_strength,
+        lora5_strength
+    ]
+
+
+    clip_strengths = [
+        lora1_clip,
+        lora2_clip,
+        lora3_clip,
+        lora4_clip,
+        lora5_clip
+    ]
+
+
     input_data = {
+
         "input": {
 
             "positive_prompt":
@@ -374,20 +669,22 @@ def generate_ui(
             "denoise":
                 float(denoise),
 
-            "lora_name":
-                lora_name,
+            "lora_names":
+                lora_names,
 
-            "lora_strength":
-                float(lora_strength),
+            "lora_strengths":
+                lora_strengths,
 
-            "clip_strength":
-                float(clip_strength),
+            "clip_strengths":
+                clip_strengths
         }
     }
+
 
     image_path, used_seed = generate(
         input_data
     )
+
 
     return (
         image_path,
@@ -396,11 +693,28 @@ def generate_ui(
     )
 
 
-DEFAULT_POSITIVE = """A beautiful woman with platinum blond hair that is almost white, snowy white skin, red bush, very big plump red lips, high cheek bones and sharp. She has almond shaped red eyes and she's holding a intricate mask. She's wearing white and gold royal gown with a black cloak. In the veins of her neck its gold."""
+# ============================================================
+# DEFAULT PROMPTS
+# ============================================================
 
-DEFAULT_NEGATIVE = """low quality, blurry, unnatural skin tone, bad lighting, pixelated,
-noise, oversharpen, soft focus, pixelated"""
+DEFAULT_POSITIVE = """
+A beautiful woman with platinum blond hair that is almost white,
+snowy white skin, red bush, very big plump red lips, high cheek
+bones and sharp. She has almond shaped red eyes and she's holding
+an intricate mask. She's wearing white and gold royal gown with
+a black cloak. In the veins of her neck its gold.
+"""
 
+
+DEFAULT_NEGATIVE = """
+low quality, blurry, unnatural skin tone, bad lighting,
+pixelated, noise, oversharpen, soft focus
+"""
+
+
+# ============================================================
+# CSS
+# ============================================================
 
 custom_css = """
 .gradio-container {
@@ -410,42 +724,74 @@ custom_css = """
         BlinkMacSystemFont,
         sans-serif;
 }
+
+.lora-box {
+    border: 1px solid #888;
+    border-radius: 10px;
+    padding: 10px;
+}
 """
 
 
-lora_files = get_lora_files()
-
-if not lora_files:
-    lora_files = [""]
-
+# ============================================================
+# GRADIO UI
+# ============================================================
 
 with gr.Blocks(
     theme=gr.themes.Soft(),
     css=custom_css
 ) as demo:
 
-    gr.HTML("""
-<div style="width:100%; display:flex; flex-direction:column;
-align-items:center; justify-content:center; margin:20px 0;">
 
-    <h1 style="font-size:2.5em; margin-bottom:10px;">
-        Z-Image-Turbo + LoRA
-    </h1>
+    gr.HTML("""
+<div style="
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    margin:20px 0;
+">
+
+<h1 style="font-size:2.5em; margin-bottom:10px;">
+Z-Image-Turbo + Multiple LoRA
+</h1>
 
 </div>
 """)
 
 
+    # ========================================================
+    # MAIN LAYOUT
+    # ========================================================
+
     with gr.Row():
 
+
+        # ====================================================
+        # LEFT
+        # ====================================================
+
         with gr.Column():
+
 
             positive = gr.Textbox(
                 DEFAULT_POSITIVE,
                 label="Positive Prompt",
+                lines=6
+            )
+
+
+            negative = gr.Textbox(
+                DEFAULT_NEGATIVE,
+                label="Negative Prompt",
                 lines=5
             )
 
+
+            # =================================================
+            # IMAGE SETTINGS
+            # =================================================
 
             with gr.Row():
 
@@ -467,6 +813,9 @@ align-items:center; justify-content:center; margin:20px 0;">
                     precision=0
                 )
 
+
+            with gr.Row():
+
                 steps = gr.Slider(
                     4,
                     25,
@@ -482,48 +831,206 @@ align-items:center; justify-content:center; margin:20px 0;">
                 )
 
 
-            # ── LoRA Settings ───────────────────────────────
+            # =================================================
+            # LORA SETTINGS
+            # =================================================
 
             with gr.Accordion(
                 "🎨 LoRA Settings",
                 open=True
             ):
 
-                lora_name = gr.Dropdown(
-                    choices=lora_files,
-                    value=lora_files[0],
-                    label="LoRA"
+
+                gr.Markdown(
+                    """
+                    ### Stack multiple LoRAs
+
+                    Leave a slot empty if you don't want to use it.
+                    """
                 )
 
-                with gr.Row():
 
-                    lora_strength = gr.Slider(
-                        -2.0,
-                        2.0,
-                        value=1.0,
-                        step=0.05,
-                        label="LoRA Model Strength"
+                # ---------------------------------------------
+                # LORA 1
+                # ---------------------------------------------
+
+                with gr.Group(
+                    elem_classes="lora-box"
+                ):
+
+                    gr.Markdown("### LoRA 1")
+
+                    lora1 = gr.Dropdown(
+                        choices=LORA_FILES,
+                        value=LORA_FILES[0],
+                        label="LoRA"
                     )
 
-                    clip_strength = gr.Slider(
-                        -2.0,
-                        2.0,
-                        value=1.0,
-                        step=0.05,
-                        label="LoRA CLIP Strength"
+                    with gr.Row():
+
+                        lora1_strength = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Model Strength"
+                        )
+
+                        lora1_clip = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="CLIP Strength"
+                        )
+
+
+                # ---------------------------------------------
+                # LORA 2
+                # ---------------------------------------------
+
+                with gr.Group(
+                    elem_classes="lora-box"
+                ):
+
+                    gr.Markdown("### LoRA 2")
+
+                    lora2 = gr.Dropdown(
+                        choices=[""] + LORA_FILES,
+                        value="",
+                        label="LoRA"
                     )
 
+                    with gr.Row():
 
-            with gr.Row():
+                        lora2_strength = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Model Strength"
+                        )
 
-                run = gr.Button(
-                    "🚀 Generate",
-                    variant="primary"
-                )
+                        lora2_clip = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="CLIP Strength"
+                        )
 
+
+                # ---------------------------------------------
+                # LORA 3
+                # ---------------------------------------------
+
+                with gr.Group(
+                    elem_classes="lora-box"
+                ):
+
+                    gr.Markdown("### LoRA 3")
+
+                    lora3 = gr.Dropdown(
+                        choices=[""] + LORA_FILES,
+                        value="",
+                        label="LoRA"
+                    )
+
+                    with gr.Row():
+
+                        lora3_strength = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Model Strength"
+                        )
+
+                        lora3_clip = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="CLIP Strength"
+                        )
+
+
+                # ---------------------------------------------
+                # LORA 4
+                # ---------------------------------------------
+
+                with gr.Group(
+                    elem_classes="lora-box"
+                ):
+
+                    gr.Markdown("### LoRA 4")
+
+                    lora4 = gr.Dropdown(
+                        choices=[""] + LORA_FILES,
+                        value="",
+                        label="LoRA"
+                    )
+
+                    with gr.Row():
+
+                        lora4_strength = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Model Strength"
+                        )
+
+                        lora4_clip = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="CLIP Strength"
+                        )
+
+
+                # ---------------------------------------------
+                # LORA 5
+                # ---------------------------------------------
+
+                with gr.Group(
+                    elem_classes="lora-box"
+                ):
+
+                    gr.Markdown("### LoRA 5")
+
+                    lora5 = gr.Dropdown(
+                        choices=[""] + LORA_FILES,
+                        value="",
+                        label="LoRA"
+                    )
+
+                    with gr.Row():
+
+                        lora5_strength = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="Model Strength"
+                        )
+
+                        lora5_clip = gr.Slider(
+                            -2.0,
+                            2.0,
+                            value=1.0,
+                            step=0.05,
+                            label="CLIP Strength"
+                        )
+
+
+            # =================================================
+            # ADVANCED
+            # =================================================
 
             with gr.Accordion(
-                "Image Settings",
+                "⚙️ Advanced Settings",
                 open=False
             ):
 
@@ -546,25 +1053,33 @@ align-items:center; justify-content:center; margin:20px 0;">
                     )
 
 
-                with gr.Row():
+            # =================================================
+            # GENERATE
+            # =================================================
 
-                    negative = gr.Textbox(
-                        DEFAULT_NEGATIVE,
-                        label="Negative Prompt",
-                        lines=3
-                    )
+            run = gr.Button(
+                "🚀 Generate",
+                variant="primary",
+                size="lg"
+            )
 
+
+        # ====================================================
+        # RIGHT
+        # ====================================================
 
         with gr.Column():
+
+            output_img = gr.Image(
+                label="Generated Image",
+                height=600
+            )
+
 
             download_image = gr.File(
                 label="Download Image"
             )
 
-            output_img = gr.Image(
-                label="Generated Image",
-                height=480
-            )
 
             used_seed = gr.Textbox(
                 label="Seed Used",
@@ -572,31 +1087,62 @@ align-items:center; justify-content:center; margin:20px 0;">
             )
 
 
+    # ========================================================
+    # BUTTON
+    # ========================================================
+
     run.click(
+
         fn=generate_ui,
 
         inputs=[
+
             positive,
             negative,
+
             width,
             height,
+
             seed,
             steps,
             batch_size,
+
             cfg,
             denoise,
-            lora_name,
-            lora_strength,
-            clip_strength
+
+            lora1,
+            lora1_strength,
+            lora1_clip,
+
+            lora2,
+            lora2_strength,
+            lora2_clip,
+
+            lora3,
+            lora3_strength,
+            lora3_clip,
+
+            lora4,
+            lora4_strength,
+            lora4_clip,
+
+            lora5,
+            lora5_strength,
+            lora5_clip
         ],
 
         outputs=[
-            download_image,
+
             output_img,
+            download_image,
             used_seed
         ]
     )
 
+
+# ============================================================
+# LAUNCH
+# ============================================================
 
 demo.launch(
     share=True,
